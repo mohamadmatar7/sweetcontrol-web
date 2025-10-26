@@ -1,0 +1,92 @@
+[
+    {
+        "id": 1,
+        "exercise": "Brisk walking (30 min)",
+        "duration_min": 30,
+        "est_bg_change_mgdl": -30,
+        "per_min_change": -1.0,
+        "dynamics": "immediate",
+        "notes": "Moderate aerobic; tends to lower BG steadily during activity."
+    },
+    {
+        "id": 2,
+        "exercise": "Light walking (30 min)",
+        "duration_min": 30,
+        "est_bg_change_mgdl": -15,
+        "per_min_change": -0.5,
+        "dynamics": "immediate",
+        "notes": "Gentle activity; small but noticeable drop."
+    },
+    {
+        "id": 3,
+        "exercise": "Moderate cycling (30 min)",
+        "duration_min": 30,
+        "est_bg_change_mgdl": -40,
+        "per_min_change": -1.3333,
+        "dynamics": "immediate",
+        "notes": "Sustained cardio; stronger glucose uptake by muscles."
+    },
+    {
+        "id": 4,
+        "exercise": "Vigorous cycling (30 min)",
+        "duration_min": 30,
+        "est_bg_change_mgdl": -60,
+        "per_min_change": -2.0,
+        "dynamics": "immediate",
+        "notes": "High-intensity aerobic; large drop likely if insulin on board."
+    },
+    {
+        "id": 5,
+        "exercise": "Jogging / running (30 min)",
+        "duration_min": 30,
+        "est_bg_change_mgdl": -50,
+        "per_min_change": -1.6667,
+        "dynamics": "immediate",
+        "notes": "Sustained running tends to lower BG substantially."
+    },
+    {
+        "id": 6,
+        "exercise": "Swimming (30 min)",
+        "duration_min": 30,
+        "est_bg_change_mgdl": -45,
+        "per_min_change": -1.5,
+        "dynamics": "immediate",
+        "notes": "Full-body aerobic; lowers BG reliably."
+    },
+    {
+        "id": 7,
+        "exercise": "Weightlifting / resistance (30 min)",
+        "duration_min": 30,
+        "est_bg_change_mgdl": -10,
+        "per_min_change": -0.3333,
+        "dynamics": "variable",
+        "notes": "Can cause small immediate drop, but short term catecholamine response may raise BG in some people."
+    },
+    {
+        "id": 8,
+        "exercise": "HIIT (High-intensity interval training) (30 min)",
+        "duration_min": 30,
+        "est_bg_change_mgdl": -20,
+        "per_min_change": -0.6667,
+        "dynamics": "variable",
+        "notes": "Often causes an initial spike (adrenal response) then a net fall after activity; highly individual."
+    },
+    {
+        "id": 9,
+        "exercise": "Yoga / stretching (30 min)",
+        "duration_min": 30,
+        "est_bg_change_mgdl": -10,
+        "per_min_change": -0.3333,
+        "dynamics": "delayed",
+        "notes": "Gentle activity; small gradual reduction, sometimes delayed."
+    },
+    {
+        "id": 10,
+        "exercise": "Aerobic dancing / Zumba (30 min)",
+        "duration_min": 30,
+        "est_bg_change_mgdl": -35,
+        "per_min_change": -1.1667,
+        "dynamics": "immediate",
+        "notes": "Continuous aerobic movement; moderate-to-strong BG reduction."
+    }
+]

@@ -1,0 +1,122 @@
+[
+    {
+        "id": 1,
+        "food": "White bread (1 slice)",
+        "carbs_g": 15,
+        "insulin_units": 1.5,
+        "bg_rise_mgdl": 68,
+        "speed": "fast"
+    },
+    {
+        "id": 2,
+        "food": "White rice (1 cup)",
+        "carbs_g": 45,
+        "insulin_units": 4.5,
+        "bg_rise_mgdl": 203,
+        "speed": "fast"
+    },
+    {
+        "id": 3,
+        "food": "Apple (medium)",
+        "carbs_g": 25,
+        "insulin_units": 2.5,
+        "bg_rise_mgdl": 113,
+        "speed": "medium"
+    },
+    {
+        "id": 4,
+        "food": "Fruit juice (1/2 cup)",
+        "carbs_g": 15,
+        "insulin_units": 1.5,
+        "bg_rise_mgdl": 68,
+        "speed": "very fast"
+    },
+    {
+        "id": 5,
+        "food": "Chocolate bar (typical)",
+        "carbs_g": 30,
+        "insulin_units": 3.0,
+        "bg_rise_mgdl": 135,
+        "speed": "slow"
+    },
+    {
+        "id": 6,
+        "food": "Boiled potato (medium)",
+        "carbs_g": 30,
+        "insulin_units": 3.0,
+        "bg_rise_mgdl": 135,
+        "speed": "fast"
+    },
+    {
+        "id": 7,
+        "food": "Whole-grain pasta (1 cup)",
+        "carbs_g": 40,
+        "insulin_units": 4.0,
+        "bg_rise_mgdl": 180,
+        "speed": "medium"
+    },
+    {
+        "id": 8,
+        "food": "Pancake with syrup (1 serving)",
+        "carbs_g": 60,
+        "insulin_units": 6.0,
+        "bg_rise_mgdl": 270,
+        "speed": "fast"
+    },
+    {
+        "id": 9,
+        "food": "Peanut butter (2 tbsp)",
+        "carbs_g": 4,
+        "insulin_units": 0.4,
+        "bg_rise_mgdl": 18,
+        "speed": "slow"
+    },
+    {
+        "id": 10,
+        "food": "Green salad (large, no dressing)",
+        "carbs_g": 2,
+        "insulin_units": 0.2,
+        "bg_rise_mgdl": 9,
+        "speed": "minimal"
+    },
+    {
+        "id": 11,
+        "food": "Applesauce, sweetened (1 cup)",
+        "carbs_g": 36,
+        "insulin_units": 3.6,
+        "bg_rise_mgdl": 162,
+        "speed": "fast"
+    },
+    {
+        "id": 12,
+        "food": "Energy drink (16 fl oz)",
+        "carbs_g": 54,
+        "insulin_units": 5.4,
+        "bg_rise_mgdl": 243,
+        "speed": "very fast"
+    },
+    {
+        "id": 13,
+        "food": "Sweetened blueberries (1 cup)",
+        "carbs_g": 45,
+        "insulin_units": 4.5,
+        "bg_rise_mgdl": 203,
+        "speed": "fast"
+    },
+    {
+        "id": 14,
+        "food": "3 Musketeers bar",
+        "carbs_g": 40,
+        "insulin_units": 4.0,
+        "bg_rise_mgdl": 180,
+        "speed": "slow"
+    },
+    {
+        "id": 15,
+        "food": "Pancake syrup (1/2 cup)",
+        "carbs_g": 67,
+        "insulin_units": 6.7,
+        "bg_rise_mgdl": 303,
+        "speed": "very fast"
+    }
+]
