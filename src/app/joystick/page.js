@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
+import { useRouter } from "next/navigation";
 import Pusher from "pusher-js";
 
 export default function JoystickPage() {
+  const router = useRouter();
   const [grabbing, setGrabbing] = useState(false);
   const [resetNotice, setResetNotice] = useState(false);
   const [queuePos, setQueuePos] = useState(null);
@@ -11,39 +13,41 @@ export default function JoystickPage() {
   const [isActive, setIsActive] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
   const [joining, setJoining] = useState(true);
+  const [error, setError] = useState(null);
+  const [showThanks, setShowThanks] = useState(false); // ✅ Modal control
 
   const lastPositionRef = useRef({ x: 0, y: 0 });
   const timerRef = useRef(null);
   const joiningRef = useRef(false);
   const userId = useRef(null);
+  const moveIntervalRef = useRef(null); // ✅ for hold movement
 
-  // ✅ Keep persistent user ID
+  // ✅ Check if user donated; redirect if not
   useEffect(() => {
     if (typeof window === "undefined") return;
 
     const storedId = localStorage.getItem("joystickUser");
-    if (storedId) {
-      userId.current = storedId;
-    } else {
-      const newId = crypto.randomUUID();
-      localStorage.setItem("joystickUser", newId);
-      userId.current = newId;
+
+    if (!storedId) {
+      console.warn("🚫 No stored user ID — redirecting home");
+      router.push("/");
+      return;
     }
 
+    userId.current = storedId;
     console.log("🪪 User ID:", userId.current);
 
-    // Leave cleanly when tab closes
     const handleUnload = () => {
       if (userId.current) {
         navigator.sendBeacon(
-          `${process.env.NEXT_PUBLIC_CORE_URL}/joystick-leave`,
+          `${process.env.NEXT_PUBLIC_CORE_URL}/joystick/leave`,
           JSON.stringify({ id: userId.current })
         );
       }
     };
     window.addEventListener("beforeunload", handleUnload);
     return () => window.removeEventListener("beforeunload", handleUnload);
-  }, []);
+  }, [router]);
 
   // 🧠 Request queue access once ID is ready
   useEffect(() => {
@@ -51,11 +55,10 @@ export default function JoystickPage() {
     requestAccess();
   }, [userId.current]);
 
-  // 🚪 Leave queue or session manually
   const endSession = async () => {
     if (!userId.current) return;
     try {
-      await fetch(`${process.env.NEXT_PUBLIC_CORE_URL}/joystick-leave`, {
+      await fetch(`${process.env.NEXT_PUBLIC_CORE_URL}/joystick/leave`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: userId.current }),
@@ -63,12 +66,15 @@ export default function JoystickPage() {
     } catch (e) {
       console.warn("⚠️ Failed to leave session cleanly:", e.message);
     }
+
+    // 🧹 show thank you modal
+    setShowThanks(true);
+    localStorage.removeItem("joystickUser");
     setIsActive(false);
     setQueuePos(null);
     setTimeLeft(0);
   };
 
-  // ⏱️ Start or resume session countdown
   const startSessionTimer = (seconds = 30) => {
     clearInterval(timerRef.current);
     setTimeLeft(seconds);
@@ -85,18 +91,31 @@ export default function JoystickPage() {
     }, 1000);
   };
 
-  // 🧩 Request to join or resume queue
   const requestAccess = async () => {
     if (joiningRef.current) return;
     joiningRef.current = true;
+    setError(null);
 
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_CORE_URL}/joystick-join`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: userId.current }),
-      });
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_CORE_URL}/joystick/join`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: userId.current }),
+        }
+      );
+
       const data = await res.json();
+
+      if (res.status === 403 || data.success === false) {
+        setError(data.message || "You already used your credits.");
+        localStorage.removeItem("joystickUser");
+        setShowThanks(true);
+        return;
+      }
+
+      if (!res.ok) throw new Error(data.message || "Failed to join queue");
 
       setQueuePos(data.position);
       setIsActive(data.active);
@@ -109,6 +128,8 @@ export default function JoystickPage() {
       setJoining(false);
     } catch (err) {
       console.error("❌ Failed to join queue:", err);
+      setError("Connection failed. Please try again.");
+      router.push("/");
     } finally {
       joiningRef.current = false;
     }
@@ -128,7 +149,6 @@ export default function JoystickPage() {
     const gameChannel = pusher.subscribe("joystick-channel");
     const queueChannel = pusher.subscribe("joystick-queue");
 
-    // 🌀 Realtime queue updates (includes remaining seconds)
     queueChannel.bind("queue-update", (data) => {
       setQueueLength(data.queue.length);
       const entry = data.queue.find((u) => u.id === userId.current);
@@ -145,10 +165,12 @@ export default function JoystickPage() {
         console.log("⌛ Session ended");
         setIsActive(false);
         clearInterval(timerRef.current);
+
+        setShowThanks(true);
+        localStorage.removeItem("joystickUser");
       }
     });
 
-    // ✅ Sync game on connect
     pusher.connection.bind("connected", async () => {
       console.log("✅ Connected — syncing game...");
       await fetch(`${process.env.NEXT_PUBLIC_CORE_URL}/send-event`, {
@@ -163,7 +185,6 @@ export default function JoystickPage() {
       await requestAccess();
     });
 
-    // ♻️ Reset joystick on new round
     gameChannel.bind("objects-init", () => {
       console.log("♻️ Game reset — joystick reset");
       lastPositionRef.current = { x: 0, y: 0 };
@@ -177,7 +198,7 @@ export default function JoystickPage() {
     };
   }, [isActive]);
 
-  // 🎮 Send command to Core
+  // 🎮 Send command
   const sendCommand = async (event, data) => {
     if (!isActive) return;
     try {
@@ -195,10 +216,10 @@ export default function JoystickPage() {
     }
   };
 
-  // Movement controls
+  // 🕹️ Movement (with hold)
   const move = (direction) => {
     if (!isActive) return;
-    const step = 20;
+    const step = 10;
     const pos = { ...lastPositionRef.current };
 
     switch (direction) {
@@ -220,7 +241,16 @@ export default function JoystickPage() {
     sendCommand("move", { direction });
   };
 
-  // Grab handler
+  // ✅ Start & stop continuous movement
+  const startMoveHold = (direction) => {
+    move(direction);
+    moveIntervalRef.current = setInterval(() => move(direction), 150);
+  };
+
+  const stopMoveHold = () => {
+    clearInterval(moveIntervalRef.current);
+  };
+
   const handleGrab = async () => {
     if (grabbing || !isActive) return;
     setGrabbing(true);
@@ -232,62 +262,56 @@ export default function JoystickPage() {
     }, 1500);
   };
 
-  // 🧭 Queue screen (waiting)
-  if (!isActive) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-gray-900 to-gray-800 text-white p-6 relative overflow-hidden">
-        <div className="absolute w-[500px] h-[500px] bg-green-600/10 rounded-full blur-3xl -top-40 -right-40"></div>
+  const handleCoin = async () => {
+    if (!isActive) return;
+    console.log("🪙 Sending coin signal...");
+    await sendCommand("coin", {});
+  };
 
-        <h1 className="text-4xl font-extrabold mb-2 tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-emerald-300">
+  // 🧭 Queue waiting screen
+  if (!isActive && !showThanks) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-gray-900 to-gray-800 text-white p-6">
+        <h1 className="text-4xl font-extrabold mb-4 bg-clip-text text-transparent bg-gradient-to-r from-green-400 to-emerald-300">
           🎮 SweetControl Queue
         </h1>
-        <p className="text-gray-400 text-sm mb-8">
-          Stay ready — the system will move you in automatically.
-        </p>
 
         {joining ? (
           <>
             <div className="w-16 h-16 border-4 border-gray-600 border-t-green-500 rounded-full animate-spin mb-4"></div>
             <p className="text-gray-400 text-sm">Connecting to queue...</p>
           </>
+        ) : error ? (
+          <p className="text-red-400 text-sm">{error}</p>
         ) : (
-          <div className="w-full max-w-sm text-center">
-            <div className="relative mb-6">
-              <p className="text-sm text-gray-400 mt-2">
-                {queuePos === 1 ? (
-                  <span className="text-green-400 font-semibold animate-pulse">
-                    You’re next! 🚀
-                  </span>
-                ) : (
-                  <>
-                    Your position:{" "}
-                    <span className="font-semibold text-white">
-                      {queuePos || "?"}
-                    </span>
-                  </>
-                )}
-              </p>
-              {timeLeft > 0 && (
-                <p className="text-xs text-gray-400 mt-2">
-                  Current session time left:{" "}
-                  <span className="text-green-400 font-semibold">
-                    {timeLeft}s
-                  </span>
-                </p>
-              )}
-            </div>
-
-            <div className="flex flex-col items-center space-y-2">
-              <div className="flex items-center justify-center space-x-2">
-                <span className="w-3 h-3 bg-green-400 rounded-full animate-ping"></span>
-                <span className="text-gray-300">Waiting for your turn...</span>
-              </div>
-              <p className="text-xs text-gray-500 italic">
-                Please don’t refresh — the page will auto-activate.
-              </p>
-            </div>
-          </div>
+          <p className="text-gray-400 text-sm">
+            Waiting for your turn... Position:{" "}
+            <span className="text-green-400 font-semibold">
+              {queuePos || "?"}
+            </span>{" "}
+            / {queueLength}
+          </p>
         )}
+      </div>
+    );
+  }
+
+  // ✅ Thank-you modal
+  if (showThanks) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-gray-900 via-green-800 to-emerald-600 text-white p-6 text-center">
+        <div className="bg-gray-800/60 backdrop-blur-md rounded-2xl p-8 shadow-2xl">
+          <h2 className="text-3xl font-extrabold mb-4">🎉 Thank you for playing!</h2>
+          <p className="text-gray-200 mb-6">
+            If you want to play again, please donate again to start a new session.
+          </p>
+          <button
+            onClick={() => router.push("/")}
+            className="px-6 py-3 bg-emerald-500 hover:bg-emerald-600 text-white font-semibold rounded-xl shadow-lg transition"
+          >
+            🏠 Go to Home
+          </button>
+        </div>
       </div>
     );
   }
@@ -303,7 +327,6 @@ export default function JoystickPage() {
         </div>
       )}
 
-      {/* Countdown Bar */}
       <div className="relative mb-6 w-64 h-3 bg-gray-700 rounded-full overflow-hidden">
         <div
           className="absolute top-0 left-0 h-full bg-green-500 transition-all"
@@ -312,43 +335,69 @@ export default function JoystickPage() {
       </div>
       <p className="text-sm text-gray-400 mb-6">Time left: {timeLeft}s</p>
 
-      {/* Controls */}
-      <div className="grid grid-cols-3 gap-4 w-64 h-64 place-items-center">
+      {/* Controls with hold */}
+      <div className="grid grid-cols-3 gap-4 w-64 h-64 place-items-center select-none">
         <div />
         <button
-          onClick={() => move("up")}
-          className="bg-gray-700 hover:bg-gray-600 rounded-xl w-16 h-16 text-lg font-bold"
+          onMouseDown={() => startMoveHold("up")}
+          onMouseUp={stopMoveHold}
+          onMouseLeave={stopMoveHold}
+          onTouchStart={() => startMoveHold("up")}
+          onTouchEnd={stopMoveHold}
+          className="bg-gray-700 hover:bg-gray-600 active:bg-gray-500 rounded-xl w-16 h-16 text-lg font-bold"
         >
           ↑
         </button>
         <div />
         <button
-          onClick={() => move("left")}
-          className="bg-gray-700 hover:bg-gray-600 rounded-xl w-16 h-16 text-lg font-bold"
+          onMouseDown={() => startMoveHold("left")}
+          onMouseUp={stopMoveHold}
+          onMouseLeave={stopMoveHold}
+          onTouchStart={() => startMoveHold("left")}
+          onTouchEnd={stopMoveHold}
+          className="bg-gray-700 hover:bg-gray-600 active:bg-gray-500 rounded-xl w-16 h-16 text-lg font-bold"
         >
           ←
         </button>
+
+        <div className="flex flex-col items-center space-y-2">
+          <button
+            onClick={handleGrab}
+            disabled={grabbing}
+            className={`rounded-xl w-16 h-16 text-lg font-bold transition-all ${
+              grabbing
+                ? "bg-red-500 hover:bg-red-400"
+                : "bg-green-600 hover:bg-green-500"
+            }`}
+          >
+            {grabbing ? "🖐" : "🤚"}
+          </button>
+          <button
+            onClick={handleCoin}
+            className="rounded-xl w-16 h-10 text-sm font-bold bg-yellow-500 hover:bg-yellow-400 text-black shadow-md"
+          >
+            🪙 Coin
+          </button>
+        </div>
+
         <button
-          onClick={handleGrab}
-          disabled={grabbing}
-          className={`rounded-xl w-16 h-16 text-lg font-bold transition-all ${
-            grabbing
-              ? "bg-red-500 hover:bg-red-400"
-              : "bg-green-600 hover:bg-green-500"
-          }`}
-        >
-          {grabbing ? "🖐" : "🤚"}
-        </button>
-        <button
-          onClick={() => move("right")}
-          className="bg-gray-700 hover:bg-gray-600 rounded-xl w-16 h-16 text-lg font-bold"
+          onMouseDown={() => startMoveHold("right")}
+          onMouseUp={stopMoveHold}
+          onMouseLeave={stopMoveHold}
+          onTouchStart={() => startMoveHold("right")}
+          onTouchEnd={stopMoveHold}
+          className="bg-gray-700 hover:bg-gray-600 active:bg-gray-500 rounded-xl w-16 h-16 text-lg font-bold"
         >
           →
         </button>
         <div />
         <button
-          onClick={() => move("down")}
-          className="bg-gray-700 hover:bg-gray-600 rounded-xl w-16 h-16 text-lg font-bold"
+          onMouseDown={() => startMoveHold("down")}
+          onMouseUp={stopMoveHold}
+          onMouseLeave={stopMoveHold}
+          onTouchStart={() => startMoveHold("down")}
+          onTouchEnd={stopMoveHold}
+          className="bg-gray-700 hover:bg-gray-600 active:bg-gray-500 rounded-xl w-16 h-16 text-lg font-bold"
         >
           ↓
         </button>
@@ -356,8 +405,9 @@ export default function JoystickPage() {
       </div>
 
       <p className="mt-8 text-gray-400 text-sm text-center max-w-xs">
-        Use the arrows to move the claw. Press{" "}
-        <strong>🤚 Grab</strong> to pick up nearby objects.
+        Use arrows to move the claw. Press{" "}
+        <strong>🤚 Grab</strong> to pick an item or{" "}
+        <strong>🪙 Coin</strong> to insert a coin.
       </p>
     </div>
   );

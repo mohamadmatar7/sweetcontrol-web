@@ -6,7 +6,8 @@
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "deploy": "npm run build && code --command 'sftp.upload.project'"
   },
   "dependencies": {
     "chart.js": "^4.5.1",
