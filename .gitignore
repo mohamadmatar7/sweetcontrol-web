@@ -48,7 +48,6 @@ next-env.d.ts
 /tmp
 /*.log
 
-
 # Deploy.js
 /deploy.js
 deploy.js
