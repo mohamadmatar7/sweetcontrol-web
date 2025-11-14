@@ -1,16 +1,15 @@
-/** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
   output: "export",
+
   experimental: {
     trustProxy: true,
+    manualClientBasePath: true,
   },
+
   devIndicators: {
-    appIsRunning: false, 
-  },
-  async redirects() {
-    return [];
-  },
+    appIsRunning: false,
+  }
 };
 
 module.exports = nextConfig;

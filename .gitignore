@@ -47,3 +47,11 @@ next-env.d.ts
 /nginx.conf
 /tmp
 /*.log
+
+
+# Deploy.js
+/deploy.js
+deploy.js
+
+# vscode
+.vscode/*

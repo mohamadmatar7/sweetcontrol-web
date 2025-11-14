@@ -12,70 +12,70 @@ export default function JoystickPage() {
   const [queueLength, setQueueLength] = useState(0);
   const [isActive, setIsActive] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
+  const [totalTime, setTotalTime] = useState(35);
   const [joining, setJoining] = useState(true);
+  const [waitingPayment, setWaitingPayment] = useState(false);
   const [error, setError] = useState(null);
-  const [showThanks, setShowThanks] = useState(false); // ✅ Modal control
+  const [showThanks, setShowThanks] = useState(false);
 
   const lastPositionRef = useRef({ x: 0, y: 0 });
   const timerRef = useRef(null);
   const joiningRef = useRef(false);
-  const userId = useRef(null);
-  const moveIntervalRef = useRef(null); // ✅ for hold movement
+  const playerIdRef = useRef(null); // technical persistent ID
+  const moveIntervalRef = useRef(null);
 
-  // ✅ Check if user donated; redirect if not
+  // Load playerId from localStorage and register unload handler
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const storedId = localStorage.getItem("joystickUser");
+    const storedId = localStorage.getItem("joystickPlayerId");
 
     if (!storedId) {
-      console.warn("🚫 No stored user ID — redirecting home");
+      // No stored player ID → send user back home to start again
       router.push("/");
       return;
     }
 
-    userId.current = storedId;
-    console.log("🪪 User ID:", userId.current);
+    playerIdRef.current = storedId;
 
     const handleUnload = () => {
-      if (userId.current) {
-        navigator.sendBeacon(
-          `${process.env.NEXT_PUBLIC_CORE_URL}/joystick/leave`,
-          JSON.stringify({ id: userId.current })
-        );
+      if (playerIdRef.current) {
+        try {
+          navigator.sendBeacon(
+            `${process.env.NEXT_PUBLIC_CORE_URL}/joystick/leave`,
+            JSON.stringify({ id: playerIdRef.current })
+          );
+        } catch {
+          // ignore beacon errors
+        }
       }
     };
+
     window.addEventListener("beforeunload", handleUnload);
     return () => window.removeEventListener("beforeunload", handleUnload);
   }, [router]);
 
-  // 🧠 Request queue access once ID is ready
-  useEffect(() => {
-    if (!userId.current) return;
-    requestAccess();
-  }, [userId.current]);
-
   const endSession = async () => {
-    if (!userId.current) return;
+    if (!playerIdRef.current) return;
     try {
       await fetch(`${process.env.NEXT_PUBLIC_CORE_URL}/joystick/leave`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: userId.current }),
+        body: JSON.stringify({ id: playerIdRef.current }),
       });
     } catch (e) {
-      console.warn("⚠️ Failed to leave session cleanly:", e.message);
+      // swallow errors, UI will still continue
     }
 
-    // 🧹 show thank you modal
     setShowThanks(true);
-    localStorage.removeItem("joystickUser");
+    // We keep joystickPlayerId in localStorage so the same playerId is reused
     setIsActive(false);
     setQueuePos(null);
     setTimeLeft(0);
   };
 
-  const startSessionTimer = (seconds = 30) => {
+  // Local countdown for UX (server is the source of truth)
+  const startSessionTimer = (seconds = 35) => {
     clearInterval(timerRef.current);
     setTimeLeft(seconds);
 
@@ -91,8 +91,47 @@ export default function JoystickPage() {
     }, 1000);
   };
 
+  // Poll backend until payment entry is visible in DB (Mollie webhook finished)
+  const waitForPaymentConfirmation = async () => {
+    if (!playerIdRef.current) return false;
+
+    setWaitingPayment(true);
+
+    // Try for up to ~150 seconds (e.g. 50 attempts * 3 seconds)
+    const maxAttempts = 50;
+    const delayMs = 3000;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_CORE_URL}/mollie/check?playerId=${encodeURIComponent(
+            playerIdRef.current
+          )}`
+        );
+        const data = await res.json();
+
+        if (data?.paid) {
+          setWaitingPayment(false);
+          return true;
+        }
+      } catch (err) {
+        console.error("❌ Error while checking payment:", err);
+        // ignore and retry
+      }
+
+      // Wait before next attempt
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+
+    setWaitingPayment(false);
+    return false;
+  };
+
+  // Ask backend to join queue or reconnect
   const requestAccess = async () => {
     if (joiningRef.current) return;
+    if (!playerIdRef.current) return;
+
     joiningRef.current = true;
     setError(null);
 
@@ -102,42 +141,48 @@ export default function JoystickPage() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: userId.current }),
+          body: JSON.stringify({ id: playerIdRef.current }),
         }
       );
 
       const data = await res.json();
 
       if (res.status === 403 || data.success === false) {
-        setError(data.message || "You already used your credits.");
-        localStorage.removeItem("joystickUser");
-        setShowThanks(true);
+        // ❗ Do NOT show "Thank you" here.
+        // This can also happen if payment is not visible yet.
+        setError(
+          data.message ||
+            "You have no active credits. If you just paid, wait a bit and refresh."
+        );
+        setJoining(false);
         return;
       }
 
       if (!res.ok) throw new Error(data.message || "Failed to join queue");
 
-      setQueuePos(data.position);
-      setIsActive(data.active);
+      setQueuePos(data.position ?? null);
+      setIsActive(Boolean(data.active));
 
       if (data.active) {
-        const seconds = data.remaining || 30;
+        const seconds = Number(data.remaining) || 35;
+        setTotalTime(seconds);
         startSessionTimer(seconds);
       }
 
       setJoining(false);
     } catch (err) {
-      console.error("❌ Failed to join queue:", err);
+      console.error("❌ requestAccess error:", err);
       setError("Connection failed. Please try again.");
-      router.push("/");
+      setJoining(false);
+      // Do not redirect away; user can manually refresh or go home
     } finally {
       joiningRef.current = false;
     }
   };
 
-  // 🔌 Setup Pusher
+  // Setup Pusher subscriptions and re-request access on connect
   useEffect(() => {
-    if (!userId.current) return;
+    if (!playerIdRef.current) return;
 
     const pusher = new Pusher(process.env.NEXT_PUBLIC_PUSHER_KEY, {
       wsHost: process.env.NEXT_PUBLIC_SOKETI_HOST,
@@ -149,44 +194,65 @@ export default function JoystickPage() {
     const gameChannel = pusher.subscribe("joystick-channel");
     const queueChannel = pusher.subscribe("joystick-queue");
 
+    // Queue updates from backend
     queueChannel.bind("queue-update", (data) => {
       setQueueLength(data.queue.length);
-      const entry = data.queue.find((u) => u.id === userId.current);
+
+      const entry = data.queue.find((u) => u.id === playerIdRef.current);
       setQueuePos(entry ? entry.position : null);
 
-      const nowActive = data.activeId === userId.current;
-      const remaining = data.remaining || 0;
+      const nowActive = data.activeId === playerIdRef.current;
+      const remaining = data.remaining || 35;
 
       if (nowActive && !isActive) {
-        console.log("🎮 You are now active!");
         setIsActive(true);
-        startSessionTimer(remaining || 30);
+        setTotalTime(remaining);
+        startSessionTimer(remaining);
       } else if (!nowActive && isActive) {
-        console.log("⌛ Session ended");
+        // Session ended on the server side
         setIsActive(false);
         clearInterval(timerRef.current);
-
         setShowThanks(true);
-        localStorage.removeItem("joystickUser");
       }
     });
 
+    // When socket connects, init game and THEN wait for payment before joining queue
     pusher.connection.bind("connected", async () => {
-      console.log("✅ Connected — syncing game...");
-      await fetch(`${process.env.NEXT_PUBLIC_CORE_URL}/send-event`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          channel: "joystick-channel",
-          event: "init-game",
-          data: {},
-        }),
-      });
+      try {
+        await fetch(`${process.env.NEXT_PUBLIC_CORE_URL}/send-event`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            channel: "joystick-channel",
+            event: "init-game",
+            data: {},
+          }),
+        });
+      } catch (e) {
+        console.error("❌ Failed to send init-game event:", e);
+      }
+
+      // At this point, user returned from Mollie.
+      // We must wait for the Mollie webhook to insert the entry in DB.
+      setJoining(true);
+      setError(null);
+
+      const paid = await waitForPaymentConfirmation();
+
+      if (!paid) {
+        setJoining(false);
+        setError(
+          "We did not receive your payment confirmation yet. If the problem persists, please contact support."
+        );
+        return;
+      }
+
+      // Now we KNOW there is a valid entry → safe to join queue.
       await requestAccess();
     });
 
+    // Reset claw position on "objects-init" event
     gameChannel.bind("objects-init", () => {
-      console.log("♻️ Game reset — joystick reset");
       lastPositionRef.current = { x: 0, y: 0 };
       setResetNotice(true);
       setTimeout(() => setResetNotice(false), 2000);
@@ -198,25 +264,20 @@ export default function JoystickPage() {
     };
   }, [isActive]);
 
-  // 🎮 Send command
+  // Send command to backend (only allowed while active)
   const sendCommand = async (event, data) => {
     if (!isActive) return;
     try {
       await fetch(`${process.env.NEXT_PUBLIC_CORE_URL}/send-event`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          channel: "joystick-channel",
-          event,
-          data,
-        }),
+        body: JSON.stringify({ channel: "joystick-channel", event, data }),
       });
     } catch (err) {
-      console.error("Error sending command:", err);
+      console.error("❌ sendCommand error:", err);
     }
   };
 
-  // 🕹️ Movement (with hold)
   const move = (direction) => {
     if (!isActive) return;
     const step = 10;
@@ -235,13 +296,14 @@ export default function JoystickPage() {
       case "right":
         pos.x = Math.min(120, pos.x + step);
         break;
+      default:
+        break;
     }
 
     lastPositionRef.current = pos;
     sendCommand("move", { direction });
   };
 
-  // ✅ Start & stop continuous movement
   const startMoveHold = (direction) => {
     move(direction);
     moveIntervalRef.current = setInterval(() => move(direction), 150);
@@ -264,11 +326,10 @@ export default function JoystickPage() {
 
   const handleCoin = async () => {
     if (!isActive) return;
-    console.log("🪙 Sending coin signal...");
     await sendCommand("coin", {});
   };
 
-  // 🧭 Queue waiting screen
+  // Waiting / queue screen
   if (!isActive && !showThanks) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-gray-900 to-gray-800 text-white p-6">
@@ -279,31 +340,40 @@ export default function JoystickPage() {
         {joining ? (
           <>
             <div className="w-16 h-16 border-4 border-gray-600 border-t-green-500 rounded-full animate-spin mb-4"></div>
-            <p className="text-gray-400 text-sm">Connecting to queue...</p>
+            <p className="text-gray-400 text-sm">
+              {waitingPayment
+                ? "Wachten op betalingsbevestiging..."
+                : "Connecting to queue..."}
+            </p>
           </>
         ) : error ? (
-          <p className="text-red-400 text-sm">{error}</p>
+          <p className="text-red-400 text-sm text-center max-w-xs">{error}</p>
         ) : (
           <p className="text-gray-400 text-sm">
             Waiting for your turn... Position:{" "}
             <span className="text-green-400 font-semibold">
-              {queuePos || "?"}
-            </span>{" "}
-            / {queueLength}
+              {queuePos ?? "-"}
+            </span>
           </p>
         )}
+        <p className="text-gray-500 text-xs mt-2">
+          Players in queue: {queueLength}
+        </p>
       </div>
     );
   }
 
-  // ✅ Thank-you modal
+  // Thank you screen after session ends (real session end, not payment only)
   if (showThanks) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-gray-900 via-green-800 to-emerald-600 text-white p-6 text-center">
         <div className="bg-gray-800/60 backdrop-blur-md rounded-2xl p-8 shadow-2xl">
-          <h2 className="text-3xl font-extrabold mb-4">🎉 Thank you for playing!</h2>
+          <h2 className="text-3xl font-extrabold mb-4">
+            🎉 Thank you for playing!
+          </h2>
           <p className="text-gray-200 mb-6">
-            If you want to play again, please donate again to start a new session.
+            If you want to play again, please donate again to start a new
+            session.
           </p>
           <button
             onClick={() => router.push("/")}
@@ -316,7 +386,7 @@ export default function JoystickPage() {
     );
   }
 
-  // 🎮 Active joystick screen
+  // Main joystick UI
   return (
     <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center text-white p-6">
       <h1 className="text-3xl font-bold mb-4">Joystick Control</h1>
@@ -330,12 +400,12 @@ export default function JoystickPage() {
       <div className="relative mb-6 w-64 h-3 bg-gray-700 rounded-full overflow-hidden">
         <div
           className="absolute top-0 left-0 h-full bg-green-500 transition-all"
-          style={{ width: `${(timeLeft / 30) * 100}%` }}
+          style={{ width: `${(timeLeft / totalTime) * 100 || 0}%` }}
         ></div>
       </div>
+
       <p className="text-sm text-gray-400 mb-6">Time left: {timeLeft}s</p>
 
-      {/* Controls with hold */}
       <div className="grid grid-cols-3 gap-4 w-64 h-64 place-items-center select-none">
         <div />
         <button
@@ -349,6 +419,7 @@ export default function JoystickPage() {
           ↑
         </button>
         <div />
+
         <button
           onMouseDown={() => startMoveHold("left")}
           onMouseUp={stopMoveHold}
@@ -390,7 +461,9 @@ export default function JoystickPage() {
         >
           →
         </button>
+
         <div />
+
         <button
           onMouseDown={() => startMoveHold("down")}
           onMouseUp={stopMoveHold}
@@ -401,13 +474,13 @@ export default function JoystickPage() {
         >
           ↓
         </button>
+
         <div />
       </div>
 
       <p className="mt-8 text-gray-400 text-sm text-center max-w-xs">
-        Use arrows to move the claw. Press{" "}
-        <strong>🤚 Grab</strong> to pick an item or{" "}
-        <strong>🪙 Coin</strong> to insert a coin.
+        Use arrows to move the claw. Press <strong>🤚 Grab</strong> to pick an
+        item or <strong>🪙 Coin</strong> to insert a coin.
       </p>
     </div>
   );

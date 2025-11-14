@@ -10,135 +10,102 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [error, setError] = useState(null);
+  const [playerId, setPlayerId] = useState(null); // technical stable ID
   const router = useRouter();
 
-  // 🧹 Always clear old sessions when returning home
+  // 🔄 Initialize / reset local storage keys and ensure a stable playerId
   useEffect(() => {
+    // Clear legacy key from old implementation
     localStorage.removeItem("joystickUser");
+
+    // Ensure we have a stable technical playerId in localStorage
+    let existingId = localStorage.getItem("joystickPlayerId");
+    if (!existingId) {
+      // Use browser crypto API to generate a UUID
+      existingId = crypto.randomUUID();
+      localStorage.setItem("joystickPlayerId", existingId);
+    }
+
+    setPlayerId(existingId);
   }, []);
 
-  // const handleSubmit = async (e) => {
-  //   e.preventDefault();
-  //   setError(null);
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(null);
 
-  //   if (!name || amount <= 0) {
-  //     return setError("⚠️ Vul je naam en een geldig bedrag in.");
-  //   }
-
-  //   setLoading(true);
-  //   try {
-  //     const fixedAmount = Math.min(amount, 500);
-
-  //     // 1️⃣ Save the donation
-  //     const res = await fetch(`${process.env.NEXT_PUBLIC_CORE_URL}/entries`, {
-  //       method: "POST",
-  //       headers: { "Content-Type": "application/json" },
-  //       body: JSON.stringify({
-  //         name: name.trim(),
-  //         email: email.trim() || null,
-  //         amount: fixedAmount,
-  //       }),
-  //     });
-
-  //     const data = await res.json();
-  //     if (!data.ok) throw new Error(data.error || "Onbekende fout");
-
-  //     // ✅ Store user
-  //     localStorage.setItem("joystickUser", name.trim());
-
-  //     // 2️⃣ Try joining queue
-  //     const joinRes = await fetch(`${process.env.NEXT_PUBLIC_CORE_URL}/joystick/join`, {
-  //       method: "POST",
-  //       headers: { "Content-Type": "application/json" },
-  //       body: JSON.stringify({ id: name.trim() }),
-  //     });
-
-  //     const joinData = await joinRes.json();
-
-  //     // 3️⃣ Handle cases
-  //     if (!joinData.success) {
-  //       if (joinData.message?.includes("donate again")) {
-  //         setError("💡 Je hebt al gespeeld. Doneer opnieuw om nog eens te spelen.");
-  //       } else {
-  //         setError("❌ Kon niet deelnemen aan de wachtrij.");
-  //       }
-  //       return;
-  //     }
-
-  //     // 4️⃣ Success — show animation
-  //     setConfirmed(true);
-  //     setTimeout(() => router.push("/joystick"), 2500);
-  //   } catch (err) {
-  //     console.error("❌ Donation error:", err);
-  //     setError("Er ging iets mis. Probeer het opnieuw.");
-  //   } finally {
-  //     setLoading(false);
-  //   }
-  // };
-
-const handleSubmit = async (e) => {
-  e.preventDefault();
-  setError(null);
-
-  if (!name.trim() || amount <= 0) {
-    return setError("⚠️ Vul je naam en een geldig bedrag in (minimaal €1).");
-  }
-
-  const fixedAmount = Math.min(amount, 500);
-  const cleanName = name.trim();
-  const cleanEmail = email.trim() || null;
-
-  // Disable button
-  setLoading(true);
-
-  try {
-    // 🧠 Save locally so Joystick can identify the user after redirect
-    localStorage.setItem("joystickUser", cleanName);
-
-    // 💳 Create payment via backend (no DB write until webhook)
-    const res = await fetch(`${process.env.NEXT_PUBLIC_CORE_URL}/mollie/create-payment`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: cleanName,
-        email: cleanEmail,
-        amount: fixedAmount,
-      }),
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Server error: ${text}`);
+    if (!name.trim() || amount <= 0) {
+      return setError("⚠️ Vul je naam en een geldig bedrag in (minimaal €1).");
     }
 
-    const data = await res.json();
-
-    if (!data?.checkoutUrl) {
-      throw new Error(data?.error || "Er is een probleem met het betaalverzoek.");
+    if (!playerId) {
+      // Safety check: playerId must exist before we create a payment
+      return setError(
+        "Er ging iets mis bij het laden. Vernieuw de pagina en probeer opnieuw."
+      );
     }
 
-    // 🚀 Redirect to Mollie checkout
-    window.location.href = data.checkoutUrl;
-  } catch (err) {
-    console.error("❌ Payment start error:", err);
-    setError(
-      "Er ging iets mis bij het starten van de betaling. Controleer je verbinding of probeer opnieuw."
-    );
-  } finally {
-    setLoading(false);
-  }
-};
+    const fixedAmount = Math.min(amount, 500);
+    const cleanName = name.trim();
+    const cleanEmail = email.trim() || null;
 
+    // Disable button while processing
+    setLoading(true);
 
+    try {
+      // 🧠 Store display name and playerId locally so the joystick page can identify the player
+      localStorage.setItem("joystickPlayerId", playerId);
+      localStorage.setItem("joystickName", cleanName);
 
-  // 🌟 Confirmation screen
+      // 💳 Create payment via backend (DB write will happen in the Mollie webhook)
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_CORE_URL}/mollie/create-payment`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: cleanName,
+            email: cleanEmail,
+            amount: fixedAmount,
+            playerId, // send technical ID to backend / Mollie metadata
+          }),
+        }
+      );
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Server error: ${text}`);
+      }
+
+      const data = await res.json();
+
+      if (!data?.checkoutUrl) {
+        throw new Error(
+          data?.error || "Er is een probleem met het betaalverzoek."
+        );
+      }
+
+      // 🚀 Redirect to Mollie checkout
+      window.location.href = data.checkoutUrl;
+    } catch (err) {
+      console.error("❌ Payment start error:", err);
+      setError(
+        "Er ging iets mis bij het starten van de betaling. Controleer je verbinding of probeer opnieuw."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 🌟 (Currently not used because we redirect directly to Mollie,
+  // but kept here if you ever want a pre-redirect confirmation screen.)
   if (confirmed) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-green-900 via-emerald-700 to-emerald-500 text-white text-center px-6">
         <div className="animate-bounce mb-6 text-5xl">🎮</div>
         <h1 className="text-3xl font-extrabold mb-3">Bedankt, {name}!</h1>
         <p className="text-lg text-emerald-100 mb-6">
-          Je donatie van <strong>€{Math.min(amount, 500)}</strong> is ontvangen.
+          Je donatie van <strong>€{Math.min(amount, 500)}</strong> is
+          ontvangen.
           <br /> We maken jouw sessie klaar...
         </p>
         <div className="relative w-48 h-3 bg-emerald-900/50 rounded-full overflow-hidden">
@@ -163,7 +130,7 @@ const handleSubmit = async (e) => {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-900 via-emerald-700 to-green-600 px-4">
       <div className="bg-white text-gray-800 shadow-2xl rounded-3xl p-8 w-full max-w-md relative overflow-hidden">
-        {/* Glow decorations */}
+        {/* Decorative glow elements */}
         <div className="absolute -top-20 -right-20 w-48 h-48 bg-emerald-400 opacity-20 rounded-full blur-3xl"></div>
         <div className="absolute -bottom-20 -left-20 w-48 h-48 bg-green-300 opacity-25 rounded-full blur-3xl"></div>
 
@@ -175,7 +142,7 @@ const handleSubmit = async (e) => {
         </p>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-5 relative z-10">
-          {/* Naam */}
+          {/* Name field */}
           <div>
             <label className="block text-sm font-semibold mb-1">Naam *</label>
             <input
@@ -188,7 +155,7 @@ const handleSubmit = async (e) => {
             />
           </div>
 
-          {/* Email */}
+          {/* Email field */}
           <div>
             <label className="block text-sm font-semibold mb-1">
               E-mail (optioneel)
@@ -202,7 +169,7 @@ const handleSubmit = async (e) => {
             />
           </div>
 
-          {/* Bedrag */}
+          {/* Amount field */}
           <div>
             <label className="block text-sm font-semibold mb-1">
               Bedrag (€1 – €500)
