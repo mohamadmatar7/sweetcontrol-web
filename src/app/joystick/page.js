@@ -14,7 +14,6 @@ export default function JoystickPage() {
   const [timeLeft, setTimeLeft] = useState(0);
   const [totalTime, setTotalTime] = useState(35);
   const [joining, setJoining] = useState(true);
-  const [waitingPayment, setWaitingPayment] = useState(false);
   const [error, setError] = useState(null);
   const [showThanks, setShowThanks] = useState(false);
 
@@ -24,14 +23,26 @@ export default function JoystickPage() {
   const playerIdRef = useRef(null); // technical persistent ID
   const moveIntervalRef = useRef(null);
 
-  // Load playerId from localStorage and register unload handler
+  // ---------------------------------------------------
+  // Load playerId from URL (if present) or localStorage
+  // ---------------------------------------------------
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const storedId = localStorage.getItem("joystickPlayerId");
+    // 1) Try to read ?player=... from URL
+    const params = new URLSearchParams(window.location.search);
+    const urlPlayer = params.get("player");
+
+    let storedId = localStorage.getItem("joystickPlayerId");
+
+    if (urlPlayer) {
+      // If URL provides a player, trust it and store it
+      storedId = urlPlayer;
+      localStorage.setItem("joystickPlayerId", urlPlayer);
+    }
 
     if (!storedId) {
-      // No stored player ID → send user back home to start again
+      // No playerId anywhere → send user back home
       router.push("/");
       return;
     }
@@ -55,8 +66,12 @@ export default function JoystickPage() {
     return () => window.removeEventListener("beforeunload", handleUnload);
   }, [router]);
 
+  // ---------------------------------------------------
+  // End session early (user leaves or timer hits 0)
+  // ---------------------------------------------------
   const endSession = async () => {
     if (!playerIdRef.current) return;
+
     try {
       await fetch(`${process.env.NEXT_PUBLIC_CORE_URL}/joystick/leave`, {
         method: "POST",
@@ -68,13 +83,14 @@ export default function JoystickPage() {
     }
 
     setShowThanks(true);
-    // We keep joystickPlayerId in localStorage so the same playerId is reused
     setIsActive(false);
     setQueuePos(null);
     setTimeLeft(0);
   };
 
-  // Local countdown for UX (server is the source of truth)
+  // ---------------------------------------------------
+  // Local countdown (backend is source of truth)
+  // ---------------------------------------------------
   const startSessionTimer = (seconds = 35) => {
     clearInterval(timerRef.current);
     setTimeLeft(seconds);
@@ -91,49 +107,17 @@ export default function JoystickPage() {
     }, 1000);
   };
 
-  // Poll backend until payment entry is visible in DB (Mollie webhook finished)
-  const waitForPaymentConfirmation = async () => {
-    if (!playerIdRef.current) return false;
-
-    setWaitingPayment(true);
-
-    // Try for up to ~150 seconds (e.g. 50 attempts * 3 seconds)
-    const maxAttempts = 50;
-    const delayMs = 3000;
-
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      try {
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_CORE_URL}/mollie/check?playerId=${encodeURIComponent(
-            playerIdRef.current
-          )}`
-        );
-        const data = await res.json();
-
-        if (data?.paid) {
-          setWaitingPayment(false);
-          return true;
-        }
-      } catch (err) {
-        console.error("❌ Error while checking payment:", err);
-        // ignore and retry
-      }
-
-      // Wait before next attempt
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
-
-    setWaitingPayment(false);
-    return false;
-  };
-
-  // Ask backend to join queue or reconnect
+  // ---------------------------------------------------
+  // Ask backend to join queue or reconnect (single source of truth)
+  // Backend itself will handle Mollie race conditions.
+  // ---------------------------------------------------
   const requestAccess = async () => {
     if (joiningRef.current) return;
     if (!playerIdRef.current) return;
 
     joiningRef.current = true;
     setError(null);
+    setJoining(true);
 
     try {
       const res = await fetch(
@@ -147,18 +131,17 @@ export default function JoystickPage() {
 
       const data = await res.json();
 
-      if (res.status === 403 || data.success === false) {
-        // ❗ Do NOT show "Thank you" here.
-        // This can also happen if payment is not visible yet.
+      if (!res.ok || data.success === false) {
+        // This includes:
+        // - no credits
+        // - payment not visible yet
         setError(
           data.message ||
-            "You have no active credits. If you just paid, wait a bit and refresh."
+            "You already played or we did not receive your credits yet. If you just paid, wait a few seconds and refresh."
         );
         setJoining(false);
         return;
       }
-
-      if (!res.ok) throw new Error(data.message || "Failed to join queue");
 
       setQueuePos(data.position ?? null);
       setIsActive(Boolean(data.active));
@@ -174,13 +157,14 @@ export default function JoystickPage() {
       console.error("❌ requestAccess error:", err);
       setError("Connection failed. Please try again.");
       setJoining(false);
-      // Do not redirect away; user can manually refresh or go home
     } finally {
       joiningRef.current = false;
     }
   };
 
-  // Setup Pusher subscriptions and re-request access on connect
+  // ---------------------------------------------------
+  // Setup Pusher + realtime queue updates
+  // ---------------------------------------------------
   useEffect(() => {
     if (!playerIdRef.current) return;
 
@@ -216,7 +200,7 @@ export default function JoystickPage() {
       }
     });
 
-    // When socket connects, init game and THEN wait for payment before joining queue
+    // When socket connects: init game and ask backend for access
     pusher.connection.bind("connected", async () => {
       try {
         await fetch(`${process.env.NEXT_PUBLIC_CORE_URL}/send-event`, {
@@ -232,22 +216,7 @@ export default function JoystickPage() {
         console.error("❌ Failed to send init-game event:", e);
       }
 
-      // At this point, user returned from Mollie.
-      // We must wait for the Mollie webhook to insert the entry in DB.
-      setJoining(true);
-      setError(null);
-
-      const paid = await waitForPaymentConfirmation();
-
-      if (!paid) {
-        setJoining(false);
-        setError(
-          "We did not receive your payment confirmation yet. If the problem persists, please contact support."
-        );
-        return;
-      }
-
-      // Now we KNOW there is a valid entry → safe to join queue.
+      // Directly ask backend to join (no extra /mollie/check polling)
       await requestAccess();
     });
 
@@ -262,9 +231,12 @@ export default function JoystickPage() {
       clearInterval(timerRef.current);
       pusher.disconnect();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive]);
 
+  // ---------------------------------------------------
   // Send command to backend (only allowed while active)
+  // ---------------------------------------------------
   const sendCommand = async (event, data) => {
     if (!isActive) return;
     try {
@@ -329,6 +301,10 @@ export default function JoystickPage() {
     await sendCommand("coin", {});
   };
 
+  // ---------------------------------------------------
+  // Screens
+  // ---------------------------------------------------
+
   // Waiting / queue screen
   if (!isActive && !showThanks) {
     return (
@@ -340,11 +316,7 @@ export default function JoystickPage() {
         {joining ? (
           <>
             <div className="w-16 h-16 border-4 border-gray-600 border-t-green-500 rounded-full animate-spin mb-4"></div>
-            <p className="text-gray-400 text-sm">
-              {waitingPayment
-                ? "Wachten op betalingsbevestiging..."
-                : "Connecting to queue..."}
-            </p>
+            <p className="text-gray-400 text-sm">Connecting to queue...</p>
           </>
         ) : error ? (
           <p className="text-red-400 text-sm text-center max-w-xs">{error}</p>
@@ -356,6 +328,7 @@ export default function JoystickPage() {
             </span>
           </p>
         )}
+
         <p className="text-gray-500 text-xs mt-2">
           Players in queue: {queueLength}
         </p>
@@ -363,7 +336,7 @@ export default function JoystickPage() {
     );
   }
 
-  // Thank you screen after session ends (real session end, not payment only)
+  // Thank you screen after real session end
   if (showThanks) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-gray-900 via-green-800 to-emerald-600 text-white p-6 text-center">

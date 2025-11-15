@@ -10,23 +10,14 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [error, setError] = useState(null);
-  const [playerId, setPlayerId] = useState(null); // technical stable ID
   const router = useRouter();
 
-  // 🔄 Initialize / reset local storage keys and ensure a stable playerId
+  // 🔄 Initialize / reset local storage keys (legacy cleanup)
   useEffect(() => {
     // Clear legacy key from old implementation
     localStorage.removeItem("joystickUser");
-
-    // Ensure we have a stable technical playerId in localStorage
-    let existingId = localStorage.getItem("joystickPlayerId");
-    if (!existingId) {
-      // Use browser crypto API to generate a UUID
-      existingId = crypto.randomUUID();
-      localStorage.setItem("joystickPlayerId", existingId);
-    }
-
-    setPlayerId(existingId);
+    // We no longer keep a permanent joystickPlayerId here.
+    // A fresh one will be generated for every new payment.
   }, []);
 
   const handleSubmit = async (e) => {
@@ -37,26 +28,22 @@ export default function HomePage() {
       return setError("⚠️ Vul je naam en een geldig bedrag in (minimaal €1).");
     }
 
-    if (!playerId) {
-      // Safety check: playerId must exist before we create a payment
-      return setError(
-        "Er ging iets mis bij het laden. Vernieuw de pagina en probeer opnieuw."
-      );
-    }
-
     const fixedAmount = Math.min(amount, 500);
     const cleanName = name.trim();
     const cleanEmail = email.trim() || null;
+
+    // ✅ Generate a NEW technical playerId for THIS payment only
+    const newPlayerId = crypto.randomUUID();
 
     // Disable button while processing
     setLoading(true);
 
     try {
       // 🧠 Store display name and playerId locally so the joystick page can identify the player
-      localStorage.setItem("joystickPlayerId", playerId);
+      localStorage.setItem("joystickPlayerId", newPlayerId);
       localStorage.setItem("joystickName", cleanName);
 
-      // 💳 Create payment via backend (DB write will happen in the Mollie webhook)
+      // 💳 Create payment via backend (DB write will happen in the Mollie webhook or /confirm)
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_CORE_URL}/mollie/create-payment`,
         {
@@ -66,7 +53,7 @@ export default function HomePage() {
             name: cleanName,
             email: cleanEmail,
             amount: fixedAmount,
-            playerId, // send technical ID to backend / Mollie metadata
+            playerId: newPlayerId, // send unique technical ID to backend / Mollie metadata
           }),
         }
       );
@@ -82,6 +69,11 @@ export default function HomePage() {
         throw new Error(
           data?.error || "Er is een probleem met het betaalverzoek."
         );
+      }
+
+      // 🧾 Optionally store paymentId if backend returns it
+      if (data.paymentId) {
+        localStorage.setItem("joystickPaymentId", data.paymentId);
       }
 
       // 🚀 Redirect to Mollie checkout
